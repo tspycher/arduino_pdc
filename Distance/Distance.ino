@@ -1,16 +1,31 @@
 #include <FastLED.h>
+#include <EEPROM.h>
+
+#define WORD_ADDRESS 0
 
 #define TRIGPIN_1 12
 #define ECHOPIN_1 13
 #define TRIGPIN_2 10
 #define ECHOPIN_2 11
-#define LED_DATA_PIN 3
+#define LED_DATA_PIN 7
+
+#define INTERNAL_BUTTON_PIN 3
+#define INTERNAL_LED1_PIN 5
+#define INTERNAL_LED2_PIN 6
+
 
 #define SPEED_OF_SOUND 0.343
 #define NUM_LEDS 16
 
-#define DISTANCE_FAR 2500
+#define DISTANCE_FAR 1000
 #define DISTANCE_CLOSE 250
+
+#define AUDIO_TONE 200
+
+const int MODE_AUDIO_VISUAL = 0;
+const int MODE_VISUAL_ONLY = 1;
+const int MODE_AUDIO_ONLY = 2;
+const int MODE_INTERNAL_ONLY = 3;
 
 struct distance {
   float distance_left;
@@ -19,19 +34,33 @@ struct distance {
   float approximation_right; // ..0 is closest
   float approximation; // 0.0 is closest
   float distance;
+  bool valid;
 };                         
 
 CRGB leds[NUM_LEDS];
+int button_state;
+int mode;
+
 
 void setup() {
   Serial.begin(115200);
 
   FastLED.addLeds<NEOPIXEL, LED_DATA_PIN>(leds, NUM_LEDS);  // GRB ordering is assumed
-  
+  FastLED.setBrightness(10);
+    
   pinMode(ECHOPIN_1, INPUT);
   pinMode(TRIGPIN_1, OUTPUT);
   pinMode(ECHOPIN_2, INPUT);
   pinMode(TRIGPIN_2, OUTPUT);
+  
+  pinMode(INTERNAL_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(INTERNAL_BUTTON_PIN), manage_mode, RISING);
+  pinMode(INTERNAL_LED1_PIN, OUTPUT);
+  pinMode(INTERNAL_LED2_PIN, OUTPUT);
+
+  mode = EEPROM.read(WORD_ADDRESS);
+  Serial.print("Loaded Mode from EEPROM: ");
+  Serial.println(mode);
   visual_startup();
 }
 
@@ -68,9 +97,25 @@ void visual_startup() {
   FastLED.show();
 }
 
-void visual_distance(distance &d, CRGB color) {
+void visual_distance(distance &d, CRGB color, bool internal_led = false, bool external_led = true) {
+  if(internal_led) {
+    if(d.approximation_right <= 0.0) {
+      digitalWrite(INTERNAL_LED1_PIN, HIGH);
+    } else {
+      digitalWrite(INTERNAL_LED1_PIN, LOW);
+    }
+    
+    if(d.approximation_left <= 0.0) {
+      digitalWrite(INTERNAL_LED2_PIN, HIGH);
+    } else {
+      digitalWrite(INTERNAL_LED2_PIN, LOW);
+    }
+  }
+
+  if(!external_led)
+    return;
+
   // calculate the visual distance representation
-  
   int left_leds = NUM_LEDS / 2;
   int right_leds = NUM_LEDS / 2;
 
@@ -124,6 +169,7 @@ void visual_distance(distance &d, CRGB color) {
   }
   
   FastLED.show();
+
 }
 
 
@@ -152,6 +198,12 @@ distance get_distance(int echo_pin1, int trigger_pin1, int echo_pin2=0, int trig
     d.distance_right = d.distance_left;
   }
 
+  if (d.distance_left >= 6820.0 and d.distance_right >= 6820.0) {
+    d.valid = false;
+  } else {
+    d.valid = true;
+  }
+  
   // CALCULATE LEFT APPROXIMATION
   if (d.distance_left >= DISTANCE_FAR) {
     d.approximation_left = 1.0;
@@ -174,6 +226,8 @@ distance get_distance(int echo_pin1, int trigger_pin1, int echo_pin2=0, int trig
   d.distance = (d.distance_left + d.distance_right) / 2;
   return d;
 }
+
+
 
 void debug_distance(distance &d) {
   // debug output
@@ -199,10 +253,56 @@ void debug_distance(distance &d) {
   Serial.println(d.approximation);
 }
 
+
+void manage_mode() {
+  ++mode;
+  if(mode > MODE_INTERNAL_ONLY or mode < 0)
+    mode = 0;
+
+  EEPROM.write(WORD_ADDRESS, mode);
+  Serial.print("Systems mode set to: ");
+  Serial.println(mode);
+
+  switch(mode) {
+      case MODE_AUDIO_ONLY:
+        FastLED.clear();
+        digitalWrite(INTERNAL_LED1_PIN, LOW);
+        digitalWrite(INTERNAL_LED2_PIN, LOW);
+        break;
+      case MODE_INTERNAL_ONLY:
+        FastLED.clear();
+        break;
+      default:
+        break;
+  }
+}
+
 void loop() {
   distance d = get_distance(ECHOPIN_1, TRIGPIN_1, ECHOPIN_2, TRIGPIN_2);
-  debug_distance(d);
-
-  visual_distance(d, CRGB::Red);
-  adaptive_delay(d);
+  
+  if (d.valid) {
+    Serial.print("Mode: ");
+    Serial.print(mode);
+    Serial.print(" ");
+    debug_distance(d);
+    
+    switch(mode) {
+      case MODE_AUDIO_VISUAL:
+        visual_distance(d, CRGB::Red, true, true);
+        audio_distance(d, AUDIO_TONE);
+        break;
+      case MODE_VISUAL_ONLY:
+        visual_distance(d, CRGB::Red, true, true);
+        break;
+      case MODE_AUDIO_ONLY:
+        audio_distance(d, AUDIO_TONE);
+        break;
+      default:
+        visual_distance(d, CRGB::Red, true, false);
+        break;
+    }
+    adaptive_delay(d);
+  } else {
+    delay(100);
+  }
 }
