@@ -1,32 +1,39 @@
 #include <FastLED.h>
 #include <EEPROM.h>
 
+// Storage Address to persist the mode of the system
 #define WORD_ADDRESS 0
 
+// Configuration of the Distance sensors
 #define TRIGPIN_1 12
 #define ECHOPIN_1 13
 #define TRIGPIN_2 10
 #define ECHOPIN_2 11
-#define LED_DATA_PIN 7
 
+#define SPEED_OF_SOUND 0.343
+#define DISTANCE_FAR 1000
+#define DISTANCE_CLOSE 250
+
+
+// Configuration of the Prototype Board LED's and Button
 #define INTERNAL_BUTTON_PIN 3
 #define INTERNAL_LED1_PIN 5
 #define INTERNAL_LED2_PIN 6
 
-
-#define SPEED_OF_SOUND 0.343
+// Configuration of the LED Strip
+#define LED_DATA_PIN 7
 #define NUM_LEDS 16
 
-#define DISTANCE_FAR 1000
-#define DISTANCE_CLOSE 250
-
+// Configuration of the Audio Output
 #define AUDIO_TONE 200
 
+// List of Modes available
 const int MODE_AUDIO_VISUAL = 0;
 const int MODE_VISUAL_ONLY = 1;
 const int MODE_AUDIO_ONLY = 2;
 const int MODE_INTERNAL_ONLY = 3;
 
+// The final distance struct containing all relevant data
 struct distance {
   float distance_left;
   float distance_right;
@@ -37,6 +44,8 @@ struct distance {
   bool valid;
 };                         
 
+
+// global variables
 CRGB leds[NUM_LEDS];
 int button_state;
 int mode;
@@ -47,17 +56,20 @@ void setup() {
 
   FastLED.addLeds<NEOPIXEL, LED_DATA_PIN>(leds, NUM_LEDS);  // GRB ordering is assumed
   FastLED.setBrightness(10);
-    
+
+  // setup distance sensors
   pinMode(ECHOPIN_1, INPUT);
   pinMode(TRIGPIN_1, OUTPUT);
   pinMode(ECHOPIN_2, INPUT);
   pinMode(TRIGPIN_2, OUTPUT);
-  
+
+  // setup prototype board leds and button
   pinMode(INTERNAL_BUTTON_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(INTERNAL_BUTTON_PIN), manage_mode, RISING);
   pinMode(INTERNAL_LED1_PIN, OUTPUT);
   pinMode(INTERNAL_LED2_PIN, OUTPUT);
 
+  // program startup
   mode = EEPROM.read(WORD_ADDRESS);
   Serial.print("Loaded Mode from EEPROM: ");
   Serial.println(mode);
@@ -69,7 +81,7 @@ void audio_distance(distance &d, int audio_tone, int beep_duration=100) {
 }
 
 void adaptive_delay(distance &d) {
-  // delay loop based on distance, as closer the vehicle get the more we read the distance.
+  // delay loop based on distance, as closer the vehicle get the more often we read the distance.
   int long_delay = 2000;
   int short_delay = 200;
   if (d.approximation >= 1.0) {
@@ -81,6 +93,7 @@ void adaptive_delay(distance &d) {
 }
 
 void visual_startup() {
+  // just some fancy blinking
   int blink_delay = 50;
   for (int l = 0; l < NUM_LEDS; ++l) {
     leds[l] = CRGB::Blue;
@@ -174,6 +187,7 @@ void visual_distance(distance &d, CRGB color, bool internal_led = false, bool ex
 
 
 float measure_distance(int echo_pin, int trigger_pin) {
+  // actually measures the distance
   digitalWrite(trigger_pin, LOW);
   delayMicroseconds(2);
   digitalWrite(trigger_pin, HIGH);
@@ -181,13 +195,12 @@ float measure_distance(int echo_pin, int trigger_pin) {
   digitalWrite(trigger_pin, LOW);
   delayMicroseconds(20);
 
-  float duration;
-  duration = pulseIn(echo_pin, HIGH);
-
+  float duration = pulseIn(echo_pin, HIGH);
   return (duration / 2) * SPEED_OF_SOUND;
 }
 
 distance get_distance(int echo_pin1, int trigger_pin1, int echo_pin2=0, int trigger_pin2=0) {
+  // here happens all the magic to build the distance struct for any further processing
   distance d;
 
   // Get distances
@@ -198,6 +211,7 @@ distance get_distance(int echo_pin1, int trigger_pin1, int echo_pin2=0, int trig
     d.distance_right = d.distance_left;
   }
 
+  // verify if the result is valid or not
   if (d.distance_left >= 6820.0 and d.distance_right >= 6820.0) {
     d.valid = false;
   } else {
@@ -222,15 +236,17 @@ distance get_distance(int echo_pin1, int trigger_pin1, int echo_pin2=0, int trig
     d.approximation_right = 1.0/(DISTANCE_FAR - DISTANCE_CLOSE)*(d.distance_right - DISTANCE_CLOSE);
   }
 
+  // Calcualte average distance and approximation
   d.approximation = (d.approximation_left + d.approximation_right) / 2;
   d.distance = (d.distance_left + d.distance_right) / 2;
   return d;
 }
 
-
-
 void debug_distance(distance &d) {
-  // debug output
+  Serial.print("Mode: ");
+  Serial.print(mode);
+  Serial.print(" ");
+
   Serial.print("distance left: ");
   Serial.print(d.distance_left);
   Serial.print("mm ");
@@ -255,6 +271,7 @@ void debug_distance(distance &d) {
 
 
 void manage_mode() {
+  // interrupt when mode button has been pressed. Changes the mode of the system.
   ++mode;
   if(mode > MODE_INTERNAL_ONLY or mode < 0)
     mode = 0;
@@ -281,9 +298,6 @@ void loop() {
   distance d = get_distance(ECHOPIN_1, TRIGPIN_1, ECHOPIN_2, TRIGPIN_2);
   
   if (d.valid) {
-    Serial.print("Mode: ");
-    Serial.print(mode);
-    Serial.print(" ");
     debug_distance(d);
     
     switch(mode) {
