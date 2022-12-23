@@ -1,5 +1,6 @@
 #include <FastLED.h>
 #include <EEPROM.h>
+#include <RCSwitch.h>
 
 // Storage Address to persist the mode of the system
 #define WORD_ADDRESS 0
@@ -9,9 +10,10 @@
 #define ECHOPIN_1 13
 #define TRIGPIN_2 10
 #define ECHOPIN_2 11
+#define SENDER_TX_PIN 4
 
 #define SPEED_OF_SOUND 0.343
-#define DISTANCE_FAR 1000
+#define DISTANCE_FAR 2500
 #define DISTANCE_CLOSE 250
 
 
@@ -49,13 +51,16 @@ struct distance {
 CRGB leds[NUM_LEDS];
 int button_state;
 int mode;
-
+RCSwitch sender = RCSwitch();
 
 void setup() {
   Serial.begin(115200);
 
   FastLED.addLeds<NEOPIXEL, LED_DATA_PIN>(leds, NUM_LEDS);  // GRB ordering is assumed
   FastLED.setBrightness(10);
+
+  // 433MHZ Sender
+  sender.enableTransmit(SENDER_TX_PIN);
 
   // setup distance sensors
   pinMode(ECHOPIN_1, INPUT);
@@ -74,6 +79,32 @@ void setup() {
   Serial.print("Loaded Mode from EEPROM: ");
   Serial.println(mode);
   visual_startup();
+}
+
+void send_distance(distance &d, int identifier = 12) {
+  // Sending actual distance, just to display
+  unsigned long transcoded_left = (unsigned long)((d.distance_left));
+  unsigned long transcoded_right = (unsigned long)((d.distance_right));
+  unsigned long rfpayload = ((unsigned long)identifier * 100000000) + transcoded_left + (transcoded_right * 10000);
+  Serial.print("Sending Distance over 433Mhz -> Left: ");
+  Serial.print(transcoded_left);
+  Serial.print(" Right: ");
+  Serial.print(transcoded_right);
+  Serial.print(" Final Payload: ");
+  Serial.println(rfpayload);
+  sender.send(rfpayload, 32);
+
+  // Sending approximation
+  unsigned long transcoded_approximation_left = (unsigned long)((d.approximation_left * 1000));
+  unsigned long transcoded_approximation_right = (unsigned long)((d.approximation_right * 1000));
+  unsigned long rfpayload2 = ((unsigned long)(identifier+1) * 100000000) + transcoded_approximation_left + (transcoded_approximation_right * 10000);
+  Serial.print("Sending Approximation over 433Mhz -> Left: ");
+  Serial.print(transcoded_left);
+  Serial.print(" Right: ");
+  Serial.print(transcoded_right);
+  Serial.print(" Final Payload: ");
+  Serial.println(rfpayload);
+  sender.send(rfpayload2, 32);    
 }
 
 void audio_distance(distance &d, int audio_tone, int beep_duration=100) {
@@ -182,7 +213,6 @@ void visual_distance(distance &d, CRGB color, bool internal_led = false, bool ex
   }
   
   FastLED.show();
-
 }
 
 
@@ -314,6 +344,10 @@ void loop() {
       default:
         visual_distance(d, CRGB::Red, true, false);
         break;
+    }
+
+    if(d.approximation_left < 1.0 || d.approximation_right < 1.0) {
+      send_distance(d);
     }
     adaptive_delay(d);
   } else {
